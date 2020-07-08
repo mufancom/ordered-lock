@@ -1,2 +1,3 @@
-# ordered-lock
-Minimalism single thread ordered lock for distributed clients.
+# Ordered Lock
+
+Minimalist single thread ordered lock for distributed clients.
