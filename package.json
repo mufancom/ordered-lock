@@ -1,6 +1,6 @@
 {
   "name": "ordered-lock",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Minimalist single thread ordered lock for distributed clients.",
   "repository": "https://github.com/makeflow/ordered-lock.git",
   "author": "Chengdu Mufan Technology Co., Ltd.",
