@@ -115,6 +115,8 @@ export class LockManager extends EventEmitter {
 
     extend(ttl);
 
+    return lockId;
+
     function extend(newTTL: number): void {
       if (timeoutId) {
         clearTimeout(timeoutId);
@@ -153,8 +155,6 @@ export class LockManager extends EventEmitter {
         },
       });
     }
-
-    return lockId;
   }
 
   extendLock(lockId: string, ttl: number | undefined): void {
