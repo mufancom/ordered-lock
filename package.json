@@ -13,6 +13,8 @@
   "files": [
     "src",
     "bld",
+    "!src/test",
+    "!bld/test",
     "!*.tsbuildinfo"
   ],
   "scripts": {
@@ -36,7 +38,7 @@
   },
   "dependencies": {
     "debug": "^4.1.1",
-    "socket-jet": "^0.2.4",
+    "socket-jet": "^0.2.5",
     "uuid": "^8.2.0",
     "villa": "^0.3.2"
   }
