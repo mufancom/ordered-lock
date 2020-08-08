@@ -7,6 +7,8 @@ import {LockManager, LockManagerLockOptions} from './lock-manager';
 export class ServerConnection extends PowerJet {
   constructor(socket: Socket, private lockManager: LockManager) {
     super(socket);
+
+    socket.setKeepAlive(true);
   }
 
   async lock(
