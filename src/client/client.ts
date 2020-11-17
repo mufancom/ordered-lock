@@ -16,6 +16,8 @@ const RECONNECT_INITIAL_INTERVAL_DEFAULT = 1;
 const RECONNECT_INTERVAL_MULTIPLIER_DEFAULT = 1.5;
 const RECONNECT_MAX_INTERVAL_DEFAULT = 5;
 
+const CLIENT_LOCK_EXTEND_SCHEDULE_DEFAULT = 0.5;
+
 export type LockHandler<T> = (
   extend: (ttl?: number) => Promise<void>,
 ) => Promise<T>;
@@ -24,6 +26,8 @@ export interface ClientLogEntry {
   type: string;
   data: object;
 }
+
+export type ClientLockExtendsCallback = (attempts: number) => number | boolean;
 
 export interface ClientLockOptions {
   /**
@@ -34,6 +38,19 @@ export interface ClientLockOptions {
    * Timeout of locking phase, in seconds.
    */
   lockingTimeout: number;
+  /**
+   * A number within (0, 1) that multiplies `ttl` to indicate when to auto
+   * extend TTL, defaults to 0.5.
+   */
+  extendSchedule?: number;
+  /**
+   * Provide either of the following value to enable auto extend.
+   * 1. A number indicates how many times to extend the TTL.
+   * 2. A callback that returns duration in seconds or a boolean to
+   *    automatically extend TTL. Return `true` to use the lock TTL, and
+   *    `false` to cancel extending.
+   */
+  extends?: number | ClientLockExtendsCallback;
 }
 
 export interface ClientConnectOptions extends Partial<TcpNetConnectOpts> {}
@@ -66,17 +83,17 @@ export class Client extends EventEmitter {
 
   async lock(
     resourceIds: string | string[],
-    options?: ClientLockOptions,
+    options?: Partial<ClientLockOptions>,
   ): Promise<string>;
   async lock<T>(
     resourceIds: string | string[],
     handler: LockHandler<T>,
-    options?: ClientLockOptions,
+    options?: Partial<ClientLockOptions>,
   ): Promise<T>;
   async lock(
     resourceIds: string | string[],
-    handler?: LockHandler<unknown> | ClientLockOptions,
-    options?: ClientLockOptions,
+    handler?: LockHandler<unknown> | Partial<ClientLockOptions>,
+    options?: Partial<ClientLockOptions>,
   ): Promise<unknown> {
     if (typeof handler !== 'function') {
       options = handler;
@@ -85,7 +102,12 @@ export class Client extends EventEmitter {
 
     let {lock: lockOptions} = this.options;
 
-    options = {
+    let {
+      ttl,
+      lockingTimeout,
+      extendSchedule = CLIENT_LOCK_EXTEND_SCHEDULE_DEFAULT,
+      extends: extendsOption,
+    } = {
       ...lockOptions,
       ...options,
     };
@@ -100,12 +122,62 @@ export class Client extends EventEmitter {
 
     debug('locking resources', resourceIds);
 
-    let lockId = await connection.call<string>('lock', resourceIds, options);
+    let lockId = await connection.call<string>('lock', resourceIds, {
+      ttl,
+      lockingTimeout,
+    });
 
     debug('locked resources', resourceIds, lockId);
 
     if (!handler) {
       return lockId;
+    }
+
+    let extendsCallback: ClientLockExtendsCallback | undefined;
+
+    if (typeof extendsOption === 'function') {
+      extendsCallback = extendsOption;
+    } else if (typeof extendsOption === 'number' && extendsOption > 0) {
+      let extendLimit = extendsOption;
+
+      extendsCallback = attempts => (attempts < extendLimit ? true : false);
+    }
+
+    let autoExtending = !!extendsCallback;
+
+    if (autoExtending) {
+      let autoExtendInterval = ttl * extendSchedule * 1000;
+      let attempts = 0;
+
+      (async () => {
+        while (true) {
+          if (!autoExtending) {
+            break;
+          }
+
+          await v.sleep(autoExtendInterval);
+
+          if (!autoExtending) {
+            break;
+          }
+
+          let extendingTTL = extendsCallback!(attempts++);
+
+          if (typeof extendingTTL === 'boolean') {
+            if (!extendingTTL) {
+              break;
+            }
+
+            extendingTTL = ttl;
+          } else if (extendingTTL <= 0) {
+            break;
+          }
+
+          await this.extendLock(lockId, extendingTTL);
+        }
+      })().catch(error => {
+        debug('auto extend error', error);
+      });
     }
 
     try {
@@ -114,6 +186,8 @@ export class Client extends EventEmitter {
       return await handler(async ttl => this.extendLock(lockId, ttl));
     } finally {
       // release //
+
+      autoExtending = false;
 
       await this.releaseLock(lockId).catch(error => {
         // It should be okay to ignore the error in most cases, as you can't do much at this phase.
